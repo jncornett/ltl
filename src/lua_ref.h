@@ -15,6 +15,8 @@ namespace detail
 template<typename Subclass = void>
 class Ref;
 
+// FIXIT-M need more descriptive tag names + need to not use tags for multiple
+// policies unless the semantics are identical
 struct generic_tag {};
 struct ref_tag {};
 
