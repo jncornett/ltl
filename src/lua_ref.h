@@ -87,7 +87,7 @@ public:
     Ref(lua_State* L, int n) :
         L { L }, n { n } { }
 
-    int index() const
+    virtual int index() const
     { return n; }
 
     virtual bool valid() const
