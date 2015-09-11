@@ -1,0 +1,119 @@
+The purpose of this library is to provide an easy-to-use API for manipulating
+and transporting C++ types and Lua types across the Lua VM boundary. This API
+aims to provide a unified interface for interacting with builtin C++ types
+(integers, floating points, pointers, etc) as well as Lua objects
+(functions, tables) and C++ user-defined types. The intent is that at a high
+level, all three of these are treated in much the same way and have access to
+the same error-checking facilities.
+
+Here is a breakdown of functionality by header file:
+
+=== lua_stack_core.h
+In order to allow different classes of objects
+(Lua objects, C++ user-defined types and basic C++ types) to be treated
+the same at a high level. This library uses a system of function overloads
+based loosely on the tagged dispatch design pattern. The assignment of tags
+to different types defines the implementation of stack operations for each type.
+
+Tagged dispatching effectively decouples the implementation of the various
+stack ops (push, cast, and type checking) from the type itself.
+
+Because of SFINAE template resolution, tags can be assigned to a type
+anywhere in the compilation unit.
+
+lua_stack_core.h contains the default template definitions for each of the
+stack implementations (*Policy structs) and the dispatching metafunctions
+(*Traits structs). It also contains the policy specializations and trait
+specializations for supported C++ builtin types.
+
+=== lua_stack_api.h
+Contains the overloaded dispatcher functions for each stack operation.
+The basic dispatchers do no error checking:
+* push - push a value onto the lua stack
+* cast - convert a value from the lua stack to its C++ equivalent
+* type - checks that the type of the value on the lua stack is castable to
+    the parameterized type
+* zero - returns a default value (if specialized) for a given type.
+    (integers have a default value of 0).
+* name - returns a string type name for the given type. used for generating
+    error messages
+
+The extended dispatchers build on the basic dispatchers and handle type errors:
+* get_default - casts a value from the lua stack if the type is valid, otherwise,
+    returns a the provided default value
+* get - get_default with a default value of zero<T>()
+* check - casts a value from the lua stack if the type is valid, otherwise,
+    throws an exception. This function is intended to be used by the
+    user-defined type registration code to facilitate the automatic application
+    of values from the Lua stack to a C++ function.
+
+=== lua_ref.h
+the Ref class is a reference type that represents a value on the lua stack.
+this is useful when we want to defer casting to a C++ type, or if the type
+on the stack is one which cannot be readily cast to a C++ type (A Lua table, for example)
+Ref is used as the base class for Func, Table, and Userdata reference types,
+which are handles for Lua Functions, Lua Tables, and Lua Userdata, respectively
+
+The Ref class contains a virtual member function, "valid()" which checks
+the validity of the index represented. It also contains convenience wrappers
+for casting and type checking the value represented at the index.
+
+=== lua_exception.h
+NOT FULLY IMPLEMENTED
+contains the exception types for various lua errors. These are leveraged
+by the user-defined type registration system to handle resource cleanup
+before raising a lua error. They are intended to be called from within the Lua VM only.
+
+=== lua_function.h
+NOT FULLY IMPLEMENTED
+Reference handle for a Lua Function. May provide a wrapper to pcall.
+
+=== lua_userdata.h
+Reference handle for a Lua userdata which represents a C++ user-defined type that has
+been registered via the user-defined type registration system
+
+=== lua_table.h
+NOT IMPLEMENTED
+Reference handle for a lua table. provides an overloaded subscript operator for
+map-like access to a lua table's values. May also provide a C++ iterator
+for traversing the entries in a lua table.
+
+=== lua_stack_view.h
+NOT IMPLEMENTED
+Provide a restricted view of the lua stack. Think of it as a virtual stack frame.
+Planned to be used as a view for the return values of a Lua function call and
+for a view of function arguments within a registered lua C function.
+
+=== lua_registration.h
+NOT IMPLEMENTED
+Provide an interface for registering C++ user-defined types and their members
+as Lua userdata and associated metatable. Aims to reduce the current boilerplate of
+casting values from the lua stack and applying them to member functions.
+Here is a tentative usage example:
+
+    class MyUserDefinedType
+    {
+    public:
+        MyUserDefinedType(int, int);
+        int a_method(int, bool, SomeClass);
+    };
+
+    static void register_my_userdefined_type(lua_State* L)
+    {
+        Lua::Registration.register_class<MyUserDefinedType>("MyUserDefinedType")
+            .add_ctor<int, int>()
+            .add_member_function("a_method", MyUserDefinedType::a_method)
+            .add_member_function("another_method", [](Lua::Arg& arg, MyUserDefinedType* self) {
+                return self->a_method(arg[1], arg[2] + 1);
+            });
+    }
+
+As demonstrated by this example, this registration system removes much of the boilerplate
+of moving values off of the lua stack to be applied to a member function, but
+also has overloads for more finer-grained control of a member functions arguments
+if necessary.
+
+=== lua_arg.h
+NOT IMPLEMENTED
+Convenience object (used by lua_registration.h) to provide access to a Lua C functions
+arguments and return values.

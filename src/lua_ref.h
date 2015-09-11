@@ -119,6 +119,7 @@ protected:
             Subclass
         >::type;
 
+    // FIXIT-H: Unused, delete this
     using parent_type = 
         typename std::conditional<
             std::is_void<Subclass>::value,
