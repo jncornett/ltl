@@ -100,7 +100,7 @@ Here is a tentative usage example:
 
     static void register_my_userdefined_type(lua_State* L)
     {
-        Lua::Registration.register_class<MyUserDefinedType>("MyUserDefinedType")
+        Lua::Registration.register_class<MyUserDefinedType>(L, "MyUserDefinedType")
             .add_ctor<int, int>()
             .add_member_function("a_method", MyUserDefinedType::a_method)
             .add_member_function("another_method", [](Lua::Arg& arg, MyUserDefinedType* self) {
@@ -117,3 +117,12 @@ if necessary.
 NOT IMPLEMENTED
 Convenience object (used by lua_registration.h) to provide access to a Lua C functions
 arguments and return values.
+
+== NOTES
+* The Ltl namespace is used to avoid namespace clashes with the existing src/lua
+    directory in the snort source. This is so I can incrementally convert existing
+    code to use the new header library. In the end, all Ltl:: namespaces will be
+    renamed Lua:: as before.
+    (Ltl stands for Lua Template Library)
+* As with any template library, the compilation time, code size should be watched
+    closely when this library is merged into Snort
