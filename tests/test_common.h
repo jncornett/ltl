@@ -3,7 +3,7 @@
 
 #include <string>
 #include <luajit-2.0/lua.hpp>
-#include "ltl.h"
+#include <ltl.h>
 #include "catch.hpp"
 
 class Vm

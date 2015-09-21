@@ -79,6 +79,12 @@ public:
     operator Class&()
     { return *get_ptr(); }
 
+    static void set_type_name(std::string name)
+    { Userdata<Class>::userdata_type_name = name; }
+
+    static std::string& get_type_name()
+    { return Userdata<Class>::userdata_type_name; }
+
 private:
     Class* get_ptr()
     {
