@@ -8,6 +8,8 @@
 
 namespace Ltl
 {
+
+class Helper {};
 namespace detail
 {
 // -----------------------------------------------------------------------------
@@ -20,7 +22,7 @@ struct PushTrait<lua_CFunction>
 { using tag = cfunction_tag; };
 
 template<>
-struct PushPolicy<lua_CFunction>
+struct PushPolicy<cfunction_tag>
 {
     template<typename T>
     static void push(lua_State* L, T v, int nup = 0)
@@ -31,8 +33,11 @@ template<typename F>
 static inline void push_function(
     lua_State* L, std::string name, int table, F&& fn, int nup = 0)
 {
-    push(L, name);
     push(L, fn, nup);
+    push(L, name);
+
+    // reverse the order of name->fn to prepare for rawset
+    lua_insert(L, lua_gettop(L) - 1);
     lua_rawset(L, table);
 }
 
@@ -61,6 +66,29 @@ struct CtorArgApplier<N, Class, Next, Rest...>
     }
 };
 
+template<int N, typename... Pack>
+struct MemFnArgApplier {};
+
+template<int N>
+struct MemFnArgApplier<N>
+{
+    template<typename Ret, typename M, typename Class, typename... Args>
+    static Ret apply(lua_State*, M mf, Class& cls, Args&&... args)
+    { return mf(cls, std::forward<Args>(args)...); }
+};
+
+template<int N, typename Next, typename... Rest>
+struct MemFnArgApplier<N, Next, Rest...>
+{
+    template<typename Ret, typename M, typename Class, typename... Args>
+    static Ret apply(lua_State* L, M mf, Class& cls, Args&&... args)
+    {
+        return MemFnArgApplier<N+1, Rest...>::template apply<Ret>(
+            L, mf, cls, std::forward<Args>(args)..., check<Next>(L, N));
+    }
+};
+
+
 // -----------------------------------------------------------------------------
 // proxy wrappers
 // -----------------------------------------------------------------------------
@@ -70,9 +98,11 @@ struct CtorHelper
     static int proxy(lua_State* L)
     {
         std::cout << "Ctor for " << Userdata<Class>::get_type_name() << " called\n";
+
         auto ptr = CtorArgApplier<1, Class, Pack...>::apply(L);
         assert(ptr);
 
+        // FIXIT-M userdata creation should go in lua_userdata?
         auto handle = reinterpret_cast<Class**>(
             lua_newuserdata(L, sizeof(Class*)));
 
@@ -96,6 +126,7 @@ struct DtorHelper
     static int proxy(lua_State* L)
     {
         std::cout << "Dtor for " << Userdata<Class>::get_type_name() << " called\n";
+        // FIXIT-M functionality should be accessed via Userdata interface
         auto handle = reinterpret_cast<Class**>(
             luaL_checkudata(L, 1, Userdata<Class>::get_type_name().c_str())
         );
@@ -117,25 +148,81 @@ template<typename Class, typename Ret, typename... Args>
 struct FunctionRegistrationHelper<Class, Ret(Class::*)(Args...)>
 {
     template<typename Wrapper>
-    static int proxy(lua_State*)
-    { return 0; }
+    static int proxy(lua_State* L)
+    {
+        std::cout << "Proxy void fn called\n";
+        auto& mf = *reinterpret_cast<Wrapper*>(
+            lua_touserdata(L, lua_upvalueindex(1)));
+
+        // FIXIT-H replace with function throwing a TypeError (AKA check())
+        auto& cls = **reinterpret_cast<Class**>(
+            luaL_checkudata(L, 1, Userdata<Class>::get_type_name().c_str()));
+
+        try
+        {
+            auto ret = MemFnArgApplier<1, Args...>::template apply<Ret>(L, mf, cls);
+            Ltl::push(L, ret);
+        }
+        catch(TypeError& e)
+        {
+            Ltl::push(L, e.what().c_str());
+            lua_error(L);
+        }
+
+        return 1;
+    }
 
     template<typename F>
     static void push(lua_State* L, std::string name, int table, F&& fn)
     {
         std::cout << "MEM fn push called\n";
-        using wrapper_t = decltype(std::mem_fn(fn));
 
-        lua_pushstring(L, name.c_str());
-
-        auto mf_upvalue = reinterpret_cast<wrapper_t*>(
-            lua_newuserdata(L, sizeof(wrapper_t))
+        auto mf = std::mem_fn(fn);
+        auto mf_ptr = reinterpret_cast<decltype(mf)*>(
+            lua_newuserdata(L, sizeof(mf))
         );
 
-        assert(mf_upvalue);
+        assert(mf_ptr);
 
-        lua_pushcclosure(L, &proxy<wrapper_t>, 1);
-        lua_rawset(L, table);
+        new (mf_ptr) decltype(mf)(mf);
+
+        push_function(L, name.c_str(), table, &proxy<decltype(mf)>, 1);
+    }
+};
+
+template<typename Class, typename... Args>
+struct FunctionRegistrationHelper<Class, void(Class::*)(Args...)>
+{
+    template<typename Wrapper>
+    static int proxy(lua_State* L)
+    {
+        std::cout << "Proxy void fn called\n";
+        auto& mf = *reinterpret_cast<Wrapper*>(
+            lua_touserdata(L, lua_upvalueindex(1)));
+
+        auto& cls = **reinterpret_cast<Class**>(
+            luaL_checkudata(L, 1, Userdata<Class>::get_type_name().c_str()));
+
+        MemFnArgApplier<1, Args...>::template apply<void>(L, mf, cls);
+
+        return 0;
+    }
+
+    template<typename F>
+    static void push(lua_State* L, std::string name, int table, F&& fn)
+    {
+        std::cout << "MEM fn push called\n";
+
+        auto mf = std::mem_fn(fn);
+        auto mf_ptr = reinterpret_cast<decltype(mf)*>(
+            lua_newuserdata(L, sizeof(mf))
+        );
+
+        assert(mf_ptr);
+
+        new (mf_ptr) decltype(mf)(mf);
+
+        push_function(L, name.c_str(), table, &proxy<decltype(mf)>, 1);
     }
 };
 

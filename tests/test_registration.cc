@@ -1,4 +1,5 @@
 #include "test_common.h"
+#include <iostream>
 
 class Foo
 {
@@ -7,7 +8,7 @@ public:
     Foo(int) { }
 
     void a_method()
-    { }
+    { std::cout << "AHAHAHAHAHA" << std::endl; }
 
     int another_method(int x, double y)
     { return (x > y) ? 1 : 2; }

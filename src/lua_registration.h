@@ -13,50 +13,8 @@
 namespace Ltl
 {
 
-class Helper { };
-
 namespace detail
 {
-template<typename Class, typename F>
-struct FunctionRegistrationHelper { };
-
-// Proper member function pointer specialization
-template<typename Class, typename Ret, typename... Args>
-struct FunctionRegistrationHelper<Class, Ret(Class::*)(Args...)>
-{
-    template<typename Wrapper>
-    static int proxy(lua_State*)
-    { return 0; }
-
-    template<typename F>
-    static void push(lua_State* L, std::string name, int table, F&& fn)
-    {
-        std::cout << "MEM fn push called\n";
-        using wrapper_t = decltype(std::mem_fn(fn));
-
-        lua_pushstring(L, name.c_str());
-
-        auto mf_upvalue = reinterpret_cast<wrapper_t*>(
-            lua_newuserdata(L, sizeof(wrapper_t))
-        );
-
-        assert(mf_upvalue);
-
-        lua_pushcclosure(L, &proxy<wrapper_t>, 1);
-        lua_rawset(L, table);
-    }
-};
-
-// Raw lua C function specialization
-template<typename Class>
-struct FunctionRegistrationHelper<Class, int(*)(lua_State*)>
-{ };
-
-// Wrapped function specialization
-template<typename Class, typename Ret>
-struct FunctionRegistrationHelper<Class, Ret(*)(Helper&, Class*)>
-{ };
-
 static inline int new_lib(lua_State* L, std::string libname)
 {
     static const luaL_reg empty_lib[] = { { nullptr, nullptr } };
