@@ -22,7 +22,7 @@ static void execute_lua(lua_State* L, const char* s)
 
 TEST_CASE( "class registration core", "[registration]" )
 {
-    Vm lua;
+    Vm lua(true);
     Ltl::register_class<Foo>(lua, "Foo")
         .add_ctor<int, int>()
         .add_function("a_method", &Foo::a_method)
@@ -30,5 +30,5 @@ TEST_CASE( "class registration core", "[registration]" )
 
     execute_lua(lua, "foo = Foo.new(1, 2)");
     execute_lua(lua, "foo:a_method()");
-    // execute_lua(lua, "assert( foo:another_method(5, 4) == 1 )");
+    execute_lua(lua, "assert( foo:another_method(5, 4) == 1 )");
 }

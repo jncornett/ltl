@@ -8,130 +8,54 @@
 #include <luajit-2.0/lua.hpp>
 
 #include "lua_userdata.h"
+#include "lua_registration_helpers.h"
 
 namespace Ltl
 {
 
-class Helper
-{ };
+class Helper { };
 
 namespace detail
 {
-template<typename F>
-static inline void push_function(lua_State* L, std::string name, F&& fn, int t)
-{
-    push(L, name);
-    lua_pushcfunction(L, fn);
-    lua_rawset(L, t);
-}
-
-// -----------------------------------------------------------------------------
-// functional helpers
-// -----------------------------------------------------------------------------
-template<int N, typename Class, typename... Pack>
-struct CtorArgApplier {};
-
-template<int N, typename Class>
-struct CtorArgApplier<N, Class>
-{
-    template<typename... Args>
-    static Class* apply(lua_State*, Args&&... args)
-    { return new Class(std::forward<Args>(args)...); }
-};
-
-template<int N, typename Class, typename Next, typename... Rest>
-struct CtorArgApplier<N, Class, Next, Rest...>
-{
-    template<typename... Args>
-    static Class* apply(lua_State* L, Args&&... args)
-    {
-        return CtorArgApplier<N+1, Class, Rest...>::apply(
-            L, std::forward<Args>(args)..., check<Next>(L, N));
-    }
-};
-
-// -----------------------------------------------------------------------------
-// registration helpers
-// -----------------------------------------------------------------------------
-
-template<typename Class, typename... Pack>
-struct CtorHelper
-{
-    static int proxy(lua_State* L)
-    {
-        std::cout << "Ctor for " << Userdata<Class>::get_type_name() << " called\n";
-        auto ptr = CtorArgApplier<1, Class, Pack...>::apply(L);
-        assert(ptr);
-
-        auto handle = reinterpret_cast<Class**>(
-            lua_newuserdata(L, sizeof(Class*)));
-
-        assert(handle);
-        luaL_getmetatable(L, Userdata<Class>::get_type_name().c_str());
-        assert(lua_istable(L, -1));
-        lua_setmetatable(L, -2);
-
-        *handle = ptr;
-
-        return 1;
-    }
-
-    static void push(lua_State* L, int table)
-    { push_function(L, "new", &proxy, table); }
-};
-
-template<typename Class>
-struct DtorHelper
-{
-    static int proxy(lua_State* L)
-    {
-        std::cout << "Dtor for " << Userdata<Class>::get_type_name() << " called\n";
-        auto handle = reinterpret_cast<Class**>(
-            luaL_checkudata(L, 1, Userdata<Class>::get_type_name().c_str())
-        );
-
-        assert(handle);
-
-        return 0;
-    }
-
-    static void push(lua_State* L, int table)
-    { push_function(L, "__gc", &proxy, table); }
-};
-
 template<typename Class, typename F>
-struct FunctionHelper { };
+struct FunctionRegistrationHelper { };
 
 // Proper member function pointer specialization
 template<typename Class, typename Ret, typename... Args>
-struct FunctionHelper<Class, Ret(Class::*)(Args...)>
-{ };
+struct FunctionRegistrationHelper<Class, Ret(Class::*)(Args...)>
+{
+    template<typename Wrapper>
+    static int proxy(lua_State*)
+    { return 0; }
+
+    template<typename F>
+    static void push(lua_State* L, std::string name, int table, F&& fn)
+    {
+        std::cout << "MEM fn push called\n";
+        using wrapper_t = decltype(std::mem_fn(fn));
+
+        lua_pushstring(L, name.c_str());
+
+        auto mf_upvalue = reinterpret_cast<wrapper_t*>(
+            lua_newuserdata(L, sizeof(wrapper_t))
+        );
+
+        assert(mf_upvalue);
+
+        lua_pushcclosure(L, &proxy<wrapper_t>, 1);
+        lua_rawset(L, table);
+    }
+};
 
 // Raw lua C function specialization
 template<typename Class>
-struct FunctionHelper<Class, int(*)(lua_State*)>
+struct FunctionRegistrationHelper<Class, int(*)(lua_State*)>
 { };
 
 // Wrapped function specialization
 template<typename Class, typename Ret>
-struct FunctionHelper<Class, Ret(*)(Helper&, Class*)>
+struct FunctionRegistrationHelper<Class, Ret(*)(Helper&, Class*)>
 { };
-
-template<typename Class, typename Wrapper>
-struct _MemberFunctionHelper
-{
-    template<typename F>
-    static void push(lua_State* L, std::string name, int table, F&& fn)
-    {
-    }
-};
-
-template<typename Class, typename F>
-struct MemberFunctionHelper
-{
-    static void push(lua_State* L, std::string name, int table, F&& fn)
-    { _MemberFunctionHelper<Class, decltype(std::mem_fn(fn))>::push(L, name, table, fn); }
-};
 
 static inline int new_lib(lua_State* L, std::string libname)
 {
@@ -175,7 +99,7 @@ public:
     template<typename F>
     ClassRegistrar& add_function(std::string name, F&& fn)
     {
-        detail::MemberFunctionHelper<Class, F>::push(
+        detail::FunctionRegistrationHelper<Class, F>::push(
             L, name, methods, std::forward<F>(fn));
 
         return *this;

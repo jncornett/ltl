@@ -9,7 +9,12 @@
 class Vm
 {
 public:
-    Vm() : L { luaL_newstate() } { }
+    Vm(bool openlibs = false) : L { luaL_newstate() }
+    {
+        if ( openlibs )
+            luaL_openlibs(L);
+    }
+
     ~Vm() { lua_close(L); }
 
     operator lua_State*() { return L; }
