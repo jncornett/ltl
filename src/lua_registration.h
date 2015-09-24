@@ -50,9 +50,10 @@ public:
     template<typename... Pack>
     ClassRegistrar& add_ctor()
     {
-        detail::CtorHelper<Class, Pack...>::push(L, methods);
+        detail::AutoCtorHelper<Class, Pack...>::push(L, methods);
         return *this;
     }
+
 
     template<typename F>
     ClassRegistrar& add_function(std::string name, F&& fn)
@@ -64,12 +65,15 @@ public:
     }
 
 private:
+    void add_default_dtor()
+    { detail::AutoDtorHelper<Class>::push(L, meta); }
+
     void open()
     {
         Userdata<Class>::set_type_name(name);
         methods = detail::new_lib(L, name);
         meta = detail::new_metalib(L, name);
-        add_dtor();
+        add_default_dtor();
     }
 
     void close()
@@ -82,9 +86,6 @@ private:
         lua_pushvalue(L, methods);
         lua_rawset(L, meta);
     }
-
-    void add_dtor()
-    { detail::DtorHelper<Class>::push(L, meta); }
 
     lua_State* L;
     std::string name;

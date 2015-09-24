@@ -6,5 +6,6 @@
 #include "lua_function.h"
 #include "lua_userdata.h"
 #include "lua_registration.h"
+#include "lua_sandbox.h"
 
 #endif

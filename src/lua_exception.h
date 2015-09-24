@@ -1,5 +1,5 @@
-#ifndef LUA_EXECPTION_H
-#define LUA_EXECPTION_H
+#ifndef LUA_EXCEPTION_H
+#define LUA_EXCEPTION_H
 
 #include <string>
 #include <sstream>

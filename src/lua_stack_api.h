@@ -77,15 +77,6 @@ static inline T get(lua_State* L, int n, Args&&... args)
         std::forward<Args>(args)...);
 }
 
-template<typename T, typename... Args>
-static inline T check(lua_State* L, int n, Args&&... args)
-{
-    if ( !type<T>(L, n, std::forward<Args>(args)...) )
-        throw TypeError(name<T>(L, n, std::forward<Args>(args)...));
-
-    return cast<T>(L, n, std::forward<Args>(args)...);
-}
-
 // FIXIT-M implement opt() at a higher abstraction layer
 // (requires too much knowledge about stack index validity)
 }

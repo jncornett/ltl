@@ -1,31 +1,13 @@
-#include <cassert>
 #include "test_common.h"
 
+namespace
+{
 class UnregisteredType {};
 class RegisteredType
 {
 public:
     void a_method() { }
 };
-
-template<typename Class>
-static void register_class(lua_State* L, const char* name)
-{
-    luaL_newmetatable(L, name);
-    lua_pop(L, 1);
-    Ltl::Userdata<Class>::userdata_type_name = name;
-}
-
-template<typename Class>
-static void create_userdata(lua_State* L)
-{
-    Class** v = static_cast<Class**>(lua_newuserdata(L, sizeof(Class*)));
-    assert(v);
-    *v = new Class();
-    assert(*v);
-    luaL_getmetatable(L, Ltl::Userdata<Class>::userdata_type_name.c_str());
-    assert(!lua_isnil(L, -1));
-    lua_setmetatable(L, -2);
 }
 
 TEST_CASE( "Stack API for Userdata", "[stack_api][func]" )
@@ -34,7 +16,7 @@ TEST_CASE( "Stack API for Userdata", "[stack_api][func]" )
 
     SECTION( "unregistered class" )
     {
-        void* p = lua_newuserdata(lua, sizeof(UnregisteredType*));
+        allocate_userdata<UnregisteredType>(lua);
         auto udata = Ltl::Userdata<UnregisteredType>(lua, lua_gettop(lua));
 
         SECTION( "type" )
@@ -45,8 +27,8 @@ TEST_CASE( "Stack API for Userdata", "[stack_api][func]" )
 
     SECTION( "registered class" )
     {
-        register_class<RegisteredType>(lua, "RegisteredType");
-        create_userdata<RegisteredType>(lua);
+        register_userdata<RegisteredType>(lua, "RegisteredType");
+        auto handle = create_userdata<RegisteredType>(lua);
         auto udata = Ltl::Userdata<RegisteredType>(lua, lua_gettop(lua));
 
         SECTION( "push" )
@@ -88,18 +70,20 @@ TEST_CASE( "Userdata members", "[userdata]" )
 
      SECTION( "unregistered type" )
      {
-         void *p = lua_newuserdata(lua, sizeof(UnregisteredType*));
-         REQUIRE( p );
+         allocate_userdata<UnregisteredType>(lua);
          auto udata = Ltl::Userdata<UnregisteredType>(lua, 1);
          CHECK( !udata.valid() );
      }
 
      SECTION( "registered type" )
      {
+         PointerManager<RegisteredType> pm;
+
          // Not redundant because it is not guaranteed which test case will
          // execute first
-         register_class<RegisteredType>(lua, "RegisteredType");
-         create_userdata<RegisteredType>(lua);
+         register_userdata<RegisteredType>(lua, "RegisteredType");
+         auto handle = create_userdata<RegisteredType>(lua);
+         *handle = pm;
 
          auto udata = Ltl::Userdata<RegisteredType>(lua, 1);
          REQUIRE( udata.valid() );
