@@ -30,6 +30,9 @@ static inline int new_metalib(lua_State* L, std::string libname)
 
 } // namespace detail
 
+enum class PropertyAccess
+{ READ_WRITE, READ_ONLY, WRITE_ONLY };
+
 template<typename Class>
 class ClassRegistrar
 {
@@ -54,15 +57,24 @@ public:
         return *this;
     }
 
-
     template<typename F>
-    ClassRegistrar& add_function(std::string name, F&& fn)
+    ClassRegistrar& add_ctor(F&& fn)
     {
-        detail::FunctionRegistrationHelper<Class, F>::push(
-            L, name, methods, std::forward<F>(fn));
-
+        detail::CustomCtorHelper<Class, F>::push(L, methods, fn);
         return *this;
     }
+
+    template<typename F>
+    ClassRegistrar& add_dtor(F&&)
+    { return *this; }
+
+    template<typename F>
+    ClassRegistrar& add_function(std::string, F&&)
+    { return *this; }
+
+    template<typename F>
+    ClassRegistrar& add_static_function(std::string, F&&)
+    { return *this; }
 
 private:
     void add_default_dtor()
@@ -92,6 +104,37 @@ private:
     bool closed;
     int methods, meta;
 };
+
+class LibRegistrar
+{
+public:
+    LibRegistrar(lua_State* L_, std::string n) :
+        L { L_ }, name { n }
+    { open(); }
+
+    ~LibRegistrar()
+    {
+        if ( !closed )
+        {
+            closed = true;
+            close();
+        }
+    }
+
+    template<typename F>
+    LibRegistrar& add_function(std::string, F&&)
+    { return *this; }
+
+private:
+    void open();
+    void close();
+
+    lua_State* L;
+    std::string name;
+    bool closed = false;
+};
+
+
 
 template<typename T>
 ClassRegistrar<T> register_class(lua_State* L, std::string name)

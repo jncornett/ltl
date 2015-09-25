@@ -76,6 +76,7 @@ static inline detail::userdata_wrapped_t<T> check(lua_State* L, int n)
     return CheckPolicy<typename CheckTrait<T>::tag>::template check<T>(L, n);
 }
 
+// FIXIT-H implement this
 class Sandbox {};
 
 }

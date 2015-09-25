@@ -51,7 +51,6 @@ template<typename T>
 static inline T* alloc_ud_ptr(lua_State* L)
 { return reinterpret_cast<T*>(lua_newuserdata(L, sizeof(T))); }
 
-
 // -----------------------------------------------------------------------------
 // C function stack API extension
 // -----------------------------------------------------------------------------
@@ -84,6 +83,55 @@ static inline void push_function(
 // -----------------------------------------------------------------------------
 // argument appliers
 // -----------------------------------------------------------------------------
+
+template<int N, typename Ret, typename... Pack>
+struct ArgumentApplier {};
+
+template<int N, typename Ret>
+struct ArgumentApplier<N, Ret>
+{
+    template<typename F, typename... Args>
+    static Ret apply(lua_State*, F fn, Args&&... args)
+    { return fn(std::forward<Args>(args)...); }
+};
+
+template<int N, typename Ret, typename Next, typename... Rest>
+struct ArgumentApplier<N, Ret, Next, Rest...>
+{
+    template<typename F, typename... Args>
+    static Ret apply(lua_State* L, F fn, Args&&... args)
+    {
+        return ArgumentApplier<N+1, Ret, Rest...>::apply(L, fn,
+            std::forward<Args>(args)..., check<Next>(L, N));
+    }
+};
+
+// Need a separate implementation for operator new because of the slightly
+// different syntax.
+
+template<int N, typename Class, typename... Pack>
+struct NewArgumentApplier {};
+
+template<int N, typename Class>
+struct NewArgumentApplier<N, Class>
+{
+    template<typename... Args>
+    static Class* apply(lua_State*, Args&&... args)
+    { return new Class(std::forward<Args>(args)...); }
+};
+
+template<int N, typename Class, typename Next, typename... Rest>
+struct NewArgumentApplier<N, Class, Next, Rest...>
+{
+    template<typename... Args>
+    static Class* apply(lua_State* L, Args&&... args)
+    {
+        return NewArgumentApplier<N+1, Class, Rest...>::apply(L,
+            std::forward<Args>(args)..., check<Next>(L, N));
+    }
+};
+
+
 template<int N, typename Class, typename... Pack>
 struct CtorArgApplier {};
 
@@ -106,40 +154,75 @@ struct CtorArgApplier<N, Class, Next, Rest...>
     }
 };
 
-template<int N, typename... Pack>
-struct MemFnArgApplier {};
+// -----------------------------------------------------------------------------
+// basic garbage-collected C++ object
+// -----------------------------------------------------------------------------
 
-template<int N>
-struct MemFnArgApplier<N>
+// construct a generic garbage-collected C++ object in the lua VM
+template<typename T>
+struct GCObject
 {
-    template<typename Ret, typename M, typename Class, typename... Args>
-    static Ret apply(lua_State*, M mf, Class& cls, Args&&... args)
-    { return mf(cls, std::forward<Args>(args)...); }
-};
-
-template<int N, typename Next, typename... Rest>
-struct MemFnArgApplier<N, Next, Rest...>
-{
-    template<typename Ret, typename M, typename Class, typename... Args>
-    static Ret apply(lua_State* L, M mf, Class& cls, Args&&... args)
+    static int dtor(lua_State* L)
     {
-        return MemFnArgApplier<N+1, Rest...>::template apply<Ret>(
-            L, mf, cls, std::forward<Args>(args)..., check<Next>(L, N));
+        // FIXIT-H add some error checking
+        auto handle = get_ud_handle<T>(L, 1);
+        if ( handle && *handle )
+        {
+            delete *handle;
+            *handle = nullptr;
+        }
+
+        return 0;
+    }
+
+    static T** create(lua_State* L)
+    {
+        // FIXIT-H add some error checking
+
+        // Create a new userdata
+        auto handle = alloc_ud_handle<T>(L);
+        int ud = lua_gettop(L);
+
+        assert(handle);
+        *handle = nullptr;
+
+        // Create a metatable
+        lua_newtable(L);
+        int meta = lua_gettop(L);
+        push_function(L, "__gc", meta, &dtor);
+
+        // Set the metatable for the object
+        lua_setmetatable(L, ud);
+
+        return handle;
+    }
+
+    static T** get(lua_State* L, int n)
+    {
+        // FIXIT-H add some error checking
+        return get_ud_handle<T>(L, n);
     }
 };
-
 
 // -----------------------------------------------------------------------------
 // proxy wrappers
 // -----------------------------------------------------------------------------
+
+using raw_fn_t = lua_CFunction;
+using raw_functor_t = std::function<int(lua_State*)>;
+
+template<typename Class>
+using wrapped_ctor_fn_t = Class*(*)(Sandbox&);
+
+template<typename Class>
+using wrapped_ctor_functor_t = std::function<Class*(Sandbox&)>;
 
 template<typename Class, typename... Pack>
 struct AutoCtorProxy
 {
     static int proxy(lua_State* L)
     {
-        std::cout << "Ctor for " << get_ud_type_name<Class>() << " called\n";
-        auto p = CtorArgApplier<1, Class, Pack...>::apply(L);
+        auto p = NewArgumentApplier<1, Class, Pack...>::apply(L);
         assert(p);
 
         auto h = alloc_ud_handle<Class>(L);
@@ -162,12 +245,79 @@ struct AutoCtorHelper
     { push_function(L, "new", table, &AutoCtorProxy<Class, Pack...>::proxy); }
 };
 
+template<typename Class, typename F>
+struct CustomCtorProxy {};
+
+template<typename Class>
+struct CustomCtorProxy<Class, wrapped_ctor_fn_t<Class>>
+{
+    static int proxy(lua_State* L)
+    {
+        auto fn = static_cast<wrapped_ctor_fn_t<Class>>(
+            const_cast<void*>(lua_topointer(L, lua_upvalueindex(1)))
+        );
+
+        return 0;
+    }
+};
+
+template<typename Class>
+struct CustomCtorProxy<Class, raw_functor_t>
+{
+    static int proxy(lua_State* L)
+    {
+        auto& fn = **get_ud_handle<raw_functor_t>(L, lua_upvalueindex(1));
+        return fn(L);
+    }
+};
+
+template<typename Class>
+struct CustomCtorProxy<Class, wrapped_ctor_functor_t<Class>>
+{ };
+
+template<typename Class, typename F>
+struct CustomCtorHelper
+{
+    static void push(lua_State* L, int table, raw_functor_t fn)
+    {
+        std::cout << "PUSH int(lua_State*) callable" << std::endl;
+
+        auto handle = GCObject<raw_functor_t>::create(L);
+        *handle = new raw_functor_t(fn);
+
+        push_function(L, "new", table,
+            &CustomCtorProxy<Class, raw_functor_t>::proxy, 1);
+    }
+
+    static void push(lua_State*, int, wrapped_ctor_functor_t<Class>);
+};
+
+template<typename Class>
+struct CustomCtorHelper<Class, raw_fn_t>
+{
+    static void push(lua_State* L, int table, raw_fn_t fn)
+    {
+        std::cout << "PUSH lua_CFunction" << std::endl;
+        push_function(L, "new", table, fn);
+    }
+};
+
+template<typename Class>
+struct CustomCtorHelper<Class, wrapped_ctor_fn_t<Class>>
+{
+    static void push(lua_State* L, int table, wrapped_ctor_fn_t<Class>)
+    {
+        std::cout << "PUSH wrapped function" << std::endl;
+        push_function(L, "new", table,
+            &CustomCtorProxy<Class, wrapped_ctor_fn_t<Class>>::proxy);
+    }
+};
+
 template<typename Class>
 struct AutoDtorProxy
 {
     static int proxy(lua_State* L)
     {
-        std::cout << "Dtor for " << get_ud_type_name<Class>() << " called\n";
         auto h = check_ud_handle<Class>(L, 1);
         assert(h && *h); // dtor should not be called twice
 
@@ -184,90 +334,6 @@ struct AutoDtorHelper
     static void push(lua_State* L, int table)
     { push_function(L, "__gc", table, &AutoDtorProxy<Class>::proxy); }
 };
-
-template<typename Class, typename Ret, typename Enable = void>
-struct AutoMemberFunctionProxy
-{
-    template<typename Wrapper, typename... Pack>
-    static int proxy(lua_State* L)
-    {
-        std::cout <<
-            "Auto proxy member fn on " << get_ud_type_name<Class>() << " called";
-
-        auto& mf = *get_ud_ptr<Wrapper>(L, lua_upvalueindex(1));
-
-        try
-        {
-            auto& cls = **check_ud_handle<Class>(L, 1);
-            auto ret = MemFnArgApplier<1, Pack...>::template apply<Ret>(L, mf, cls);
-            Ltl::push(L, ret);
-        }
-        catch(TypeError& e)
-        {
-            Ltl::push(L, e.what());
-            lua_error(L);
-        }
-
-        return 1;
-    }
-};
-
-template<typename Class, typename Ret>
-struct AutoMemberFunctionProxy<
-    Class,
-    Ret,
-    typename std::enable_if<std::is_void<Ret>::value>::type
->
-{
-    template<typename Wrapper, typename... Pack>
-    static int proxy(lua_State* L)
-    {
-        std::cout <<
-            "Auto void proxy member fn on " << get_ud_type_name<Class>() << " called";
-
-        auto& mf = *get_ud_ptr<Wrapper>(L, lua_upvalueindex(1));
-
-        try
-        {
-            auto& cls = **check_ud_handle<Class>(L, 1);
-            MemFnArgApplier<1, Pack...>::template apply<Ret>(L, mf, cls);
-        }
-        catch(TypeError& e)
-        {
-            Ltl::push(L, e.what());
-            lua_error(L);
-        }
-
-        return 0;
-    }
-};
-
-template<typename Class, typename F>
-struct FunctionRegistrationHelper {};
-
-// // Proper member function pointer specialization
-template<typename Class, typename Ret, typename... Args>
-struct FunctionRegistrationHelper<Class, Ret(Class::*)(Args...)>
-{
-    template<typename F>
-    static void push(lua_State* L, std::string name, int table, F&& fn)
-    {
-        auto mf = std::mem_fn(fn);
-        auto mf_ptr = alloc_ud_ptr<decltype(mf)>(L);
-        assert(mf_ptr);
-
-        // copy construct member function wrapper in the Lua VM
-        new (mf_ptr) decltype(mf)(mf);
-
-        push_function(L, name.c_str(), table,
-            &AutoMemberFunctionProxy<Class, Ret>::template proxy<decltype(mf), Args...>);
-    }
-};
-
-// // Raw lua C function specialization
-// template<typename Class>
-// struct FunctionRegistrationHelper<Class, int(*)(lua_State*)>
-// { };
 
 } // namespace detail
 }
